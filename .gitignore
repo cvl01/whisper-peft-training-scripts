@@ -162,5 +162,8 @@ cython_debug/
 #.idea/
 
 # Project specific
-models
-datasets
+models/
+datasets/
+
+.conda/
+.vscode/
