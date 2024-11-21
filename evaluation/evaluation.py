@@ -2,13 +2,14 @@ import gc
 import evaluate
 from jiwer import process
 from librosa import feature
+from peft.config import PeftConfig
+from peft.peft_model import PeftModel
 import torch
 import numpy as np
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 from train.data_collator import DataCollatorSpeechSeq2SeqWithPadding
 from transformers import BitsAndBytesConfig, WhisperFeatureExtractor, WhisperProcessor, WhisperTokenizerFast, pipeline
-from peft import PeftModel, PeftConfig
 from transformers import WhisperForConditionalGeneration, Seq2SeqTrainer
 from datasets import Dataset, DatasetDict
 from evaluation.dutch_normalizer import DutchTextNormalizer
@@ -138,6 +139,62 @@ def evaluate_model(model_id: str, test_dataset: Dataset):
         references=norm_references, predictions=norm_predictions
     )
     norm_cer = round(100 * norm_cer, 2) # type: ignore
+
+    print("WER : ", wer)
+    print("CER : ", cer)
+    print("\nNORMALIZED WER : ", norm_wer)
+    print("NORMALIZED CER : ", norm_cer)
+
+    return {
+        "wer": wer,
+        "norm_wer": norm_wer,
+        "cer": cer,
+        "norm_cer": norm_cer,
+    }
+
+
+
+def compute_wer(model, processor, dataset, device):
+    model.eval()
+    model.to(device)
+
+    all_references = []
+    all_hypotheses = []
+
+    for batch in tqdm(dataset):
+
+        input_features = processor(
+            batch["audio"]["array"], sampling_rate=16000, return_tensors="pt"
+        ).input_features
+        input_features = input_features.to(device)
+
+        with torch.no_grad():
+            predicted_ids = model.generate(
+                input_features, language="nl", task="transcribe"
+            )
+
+        transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)
+
+        all_references.extend([batch["sentence"]])
+        all_hypotheses.extend(transcription)
+
+    wer_metric = evaluate.load("wer")
+    cer_metric = evaluate.load("cer")
+    wer = wer_metric.compute(references=all_references, predictions=all_hypotheses)
+    wer = round(100 * wer, 2)  # type: ignore
+    cer = cer_metric.compute(references=all_references, predictions=all_hypotheses)
+    cer = round(100 * cer, 2)  # type: ignore
+
+    norm_predictions = [whisper_norm(pred) for pred in all_hypotheses]
+    norm_references = [whisper_norm(ref) for ref in all_references]
+    norm_wer = wer_metric.compute(
+        references=norm_references, predictions=norm_predictions
+    )
+    norm_wer = round(100 * norm_wer, 2)  # type: ignore
+    norm_cer = cer_metric.compute(
+        references=norm_references, predictions=norm_predictions
+    )
+    norm_cer = round(100 * norm_cer, 2)  # type: ignore
 
     print("WER : ", wer)
     print("CER : ", cer)
